@@ -158,7 +158,7 @@ func (r *Runner) Run(ctx context.Context, todo []*Step, prior map[string]Status,
 
 func (r *Runner) skipReason(s *Step, status map[string]Status) string {
 	if s.NeedsRoot && r.Remote.Info.Root == "none" {
-		return "needs root or passwordless sudo, which this login doesn't have"
+		return "needs root or sudo, which is not available (or no sudo password was given)"
 	}
 	for _, req := range s.Requires {
 		if st := status[req]; !st.OK() {

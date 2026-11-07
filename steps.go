@@ -14,16 +14,17 @@ import (
 
 // Step is one install/config action, backed by a shell script in the steps dir.
 type Step struct {
-	ID          string // filename without order prefix and .sh
-	Order       int    // numeric filename prefix
-	Path        string
-	Name        string
-	Description string
-	Default     bool
-	Requires    []string
-	NeedsRoot   bool
-	Hidden      bool // not shown in the checklist; pulled in only via requires
-	Timeout     time.Duration
+	ID           string // filename without order prefix and .sh
+	Order        int    // numeric filename prefix
+	Path         string
+	Name         string
+	Description  string
+	Default      bool
+	Requires     []string
+	NeedsRoot    bool // skipped when root is unavailable
+	RootOptional bool // may use root (gets the sudo password) but runs without it
+	Hidden       bool // not shown in the checklist; pulled in only via requires
+	Timeout      time.Duration
 }
 
 var (
@@ -83,7 +84,11 @@ func LoadSteps(dir string) ([]*Step, error) {
 					s.Requires = append(s.Requires, r)
 				}
 			case "needs-root":
-				s.NeedsRoot = parseBool(v)
+				if strings.EqualFold(v, "optional") {
+					s.RootOptional = true
+				} else {
+					s.NeedsRoot = parseBool(v)
+				}
 			case "hidden":
 				s.Hidden = parseBool(v)
 			case "timeout":

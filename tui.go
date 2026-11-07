@@ -272,7 +272,7 @@ func (m *model) View() string {
 			line := fmt.Sprintf("%s%s %s", cur, box, s.Name)
 			b.WriteString(line)
 			if s.NeedsRoot && m.info.Root == "none" {
-				b.WriteString(sWarn.Render("  (needs root, unavailable: will be skipped)"))
+				b.WriteString(sWarn.Render("  (needs root or sudo: unavailable, will be skipped)"))
 			}
 			b.WriteString("\n")
 			if i == m.cursor && s.Description != "" {

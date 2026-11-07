@@ -3,7 +3,7 @@
 # sss-description: curl, unzip, xz, git and certificates needed by the download steps
 # sss-default: on
 # sss-hidden: true
-# sss-needs-root: false
+# sss-needs-root: optional
 
 pkgs="curl ca-certificates unzip xz-utils file git tar"
 missing=""

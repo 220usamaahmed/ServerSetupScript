@@ -10,6 +10,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"golang.org/x/term"
 )
 
 const usage = `usage: sss [options] [user@]host
@@ -233,6 +235,10 @@ func run() int {
 		fmt.Fprintf(os.Stderr, "sss: warning: unsupported OS %q, continuing because of --force\n", osID)
 	}
 
+	if remote.Info.Root == "sudo-password" {
+		resolveSudoPassword(remote, o, steps, sel)
+	}
+
 	home, _ := os.UserHomeDir()
 	logDir := filepath.Join(home, ".local", "state", "sss", "logs",
 		unsafeRe.ReplaceAllString(o.host, "_"), time.Now().Format("20060102-150405"))
@@ -262,4 +268,51 @@ func run() int {
 		fmt.Fprintf(os.Stderr, "sss: %v\n", err)
 	}
 	return code
+}
+
+// resolveSudoPassword handles servers where sudo needs a password. If a step
+// that may use root is selected, it takes the password from $SSS_SUDO_PASSWORD
+// or (interactively) prompts for it, and verifies it before anything runs.
+// If no verified password results, root is treated as unavailable so the root
+// steps are skipped with a clear reason instead of failing one by one.
+func resolveSudoPassword(remote *Remote, o *options, steps []*Step, sel map[string]bool) {
+	needed := false
+	for _, s := range steps {
+		if sel[s.ID] && (s.NeedsRoot || s.RootOptional) {
+			needed = true
+		}
+	}
+	if !needed {
+		return
+	}
+	ctx := context.Background()
+	if pw := os.Getenv("SSS_SUDO_PASSWORD"); pw != "" {
+		if remote.VerifySudo(ctx, pw) {
+			remote.SudoPassword = pw
+			return
+		}
+		fmt.Fprintln(os.Stderr, "sss: $SSS_SUDO_PASSWORD was rejected by sudo on the server")
+	} else if o.yes || !isTTY(os.Stdin) || !isTTY(os.Stderr) {
+		fmt.Fprintln(os.Stderr, "sss: sudo on the server needs a password; set SSS_SUDO_PASSWORD or run without --yes to be prompted")
+	} else {
+		user := "this user"
+		if u, _, ok := strings.Cut(remote.Host, "@"); ok {
+			user = u
+		}
+		for attempt := 1; attempt <= 3; attempt++ {
+			fmt.Fprintf(os.Stderr, "sudo password for %s (empty to skip root steps): ", user)
+			b, err := term.ReadPassword(int(os.Stdin.Fd()))
+			fmt.Fprintln(os.Stderr)
+			if err != nil || len(b) == 0 {
+				break
+			}
+			if remote.VerifySudo(ctx, string(b)) {
+				remote.SudoPassword = string(b)
+				return
+			}
+			fmt.Fprintln(os.Stderr, "sorry, that password did not work")
+		}
+	}
+	fmt.Fprintln(os.Stderr, "sss: continuing without root; steps that need it will be skipped")
+	remote.Info.Root = "none"
 }

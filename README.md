@@ -44,8 +44,17 @@ Exit code: `0` all steps ok/already done/skipped, `1` at least one step failed, 
 ### Requirements on the server
 
 Debian or Ubuntu, x86_64 or arm64, and `bash`. Steps marked `needs-root` need
-you to be root or have passwordless `sudo`. A preflight checks this once; without
-root those steps are skipped, everything user-level still runs.
+you to be root or have `sudo`. A preflight checks this once; without root those
+steps are skipped, everything user-level still runs.
+
+**sudo with a password:** if sudo asks for a password, `sss` prompts for it once
+(masked) before the checklist and verifies it with the server. Press enter on an
+empty prompt to skip the root steps instead. With `--yes` there is no prompt: set
+`SSS_SUDO_PASSWORD` in the environment, otherwise root steps are skipped. The
+password lives in memory only. It is sent over the SSH connection as the first
+stdin line of steps that need root, and handed to `sudo -A` through a throwaway
+askpass script that reads it from an environment variable of that step. It never
+appears on a command line, in a log, in the saved selection, or on disk.
 
 ### Version pins
 
@@ -103,7 +112,7 @@ A step is `steps/NN-id.sh`. `NN` sets the order, `id` is what `--only` and
 # sss-description: Shown under the cursor in the checklist
 # sss-default: on            # on|off, start ticked or not
 # sss-requires: base-packages  # comma-separated step ids, run first, ticked automatically
-# sss-needs-root: false      # skipped when the login has no root/sudo
+# sss-needs-root: false      # true = skipped when there is no root/sudo; optional = may use root (gets the sudo password) but runs without it
 # sss-hidden: false          # true = not in the checklist, only pulled in via requires
 # sss-timeout: 600           # seconds, default 600
 
@@ -119,12 +128,12 @@ line becomes the one-line result; on failure the last lines are shown as the
 error. Write steps so re-running is safe.
 
 `lib/common.sh` is sent ahead of every step and runs with `set -eu`. Helpers:
-`log`, `die`, `have`, `already_done`, `not_applicable`, `as_root`, `apt_install`,
+`log`, `die`, `have`, `already_done`, `not_applicable`, `as_root` (root, sudo, or sudo with password), `apt_install`,
 `need_cmds`, `ensure_bin_dir`, `resolve_tag NAME owner/repo` (latest GitHub
 release, honouring `SSS_<NAME>_VERSION`), `download URL DEST`,
 `replace_block FILE MARKER <<EOF` (idempotent managed block, sets
 `BLOCK_CHANGED`), `$tmpdir` (removed on exit). Variables: `$SSS_ARCH`
-(`x86_64`|`aarch64`), `$SSS_ROOT` (`root`|`sudo`|`none`), `$SSS_BIN` (`~/.local/bin`).
+(`x86_64`|`aarch64`), `$SSS_ROOT` (`root`|`sudo`|`sudo-password`|`none`), `$SSS_BIN` (`~/.local/bin`).
 
 To remove a step, delete its file. To change one, edit it; nothing needs rebuilding.
 
@@ -132,5 +141,5 @@ To remove a step, delete its file. To change one, edit it; nothing needs rebuild
 
 `test/run.sh` builds an Ubuntu (or Debian) container with sshd and runs `sss`
 against it. Variants: `PLATFORM=linux/amd64`, `SSS_USER=plain` (no sudo),
-`BASE=debian:12`, `KEEP=1`. The container has no systemd, so the `persistence`
+`BASE=debian:12`, `KEEP=1`. `SSS_USER=pwuser SSS_SUDO_PASSWORD=testpw` tests sudo with a password. The container has no systemd, so the `persistence`
 step reports "skipped" there.

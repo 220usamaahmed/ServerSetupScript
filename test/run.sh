@@ -3,6 +3,7 @@
 #   test/run.sh                      # arm64, user "tester" (sudo), plain output
 #   PLATFORM=linux/amd64 test/run.sh # x86_64 under emulation
 #   SSS_USER=plain test/run.sh       # no root: needs-root steps must be skipped
+#   SSS_USER=pwuser SSS_SUDO_PASSWORD=testpw test/run.sh --yes   # sudo with a password
 #   BASE=debian:12 test/run.sh       # Debian instead of Ubuntu
 #   KEEP=1 test/run.sh               # leave the container running (ssh -p 2222 -i test/keys/id_ed25519 tester@localhost)
 # Extra arguments are passed to sss.

@@ -22,11 +22,23 @@ have() { command -v "$1" >/dev/null 2>&1; }
 already_done()   { log "${*:-already done}"; exit 10; }
 not_applicable() { log "${*:-not applicable}"; exit 11; }
 
-# as_root cmd args...  -- run a command as root (directly, or via sudo -n)
+# as_root cmd args...  -- run a command as root (directly, or via sudo).
+# With SSS_ROOT=sudo-password, sudo asks for the password through a tiny
+# askpass script that prints $SSS_SUDO_PW (set by sss; never on a command line).
 as_root() {
   case "$SSS_ROOT" in
     root) "$@" ;;
     sudo) sudo -n "$@" ;;
+    sudo-password)
+      [ -n "${SSS_SUDO_PW:-}" ] || die "this needs your sudo password, which was not provided"
+      if [ ! -x "$tmpdir/askpass" ]; then
+        cat > "$tmpdir/askpass" <<'ASKPASS'
+#!/bin/sh
+printf '%s\n' "$SSS_SUDO_PW"
+ASKPASS
+        chmod 700 "$tmpdir/askpass"
+      fi
+      SUDO_ASKPASS="$tmpdir/askpass" sudo -A "$@" ;;
     *)    die "this needs root or passwordless sudo, and neither is available" ;;
   esac
 }

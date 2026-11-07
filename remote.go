@@ -20,12 +20,16 @@ type Info struct {
 	OS      string // debian, ubuntu, ...
 	Version string
 	Arch    string // x86_64 | aarch64
-	Root    string // root | sudo | none
+	Root    string // root | sudo | sudo-password | none| sudo | none
 	Home    string
 }
 
 func (i Info) String() string {
-	return fmt.Sprintf("%s %s · %s · root: %s", i.OS, i.Version, i.Arch, i.Root)
+	root := i.Root
+	if root == "sudo-password" {
+		root = "sudo (needs password)"
+	}
+	return fmt.Sprintf("%s %s · %s · root: %s", i.OS, i.Version, i.Arch, root)
 }
 
 // Remote drives a server through the system ssh binary and one ControlMaster
@@ -36,6 +40,10 @@ type Remote struct {
 	ctlDir    string
 	ctlPath   string
 	Info      Info
+
+	// SudoPassword is held in memory only. It is sent as the first stdin line of
+	// steps that need root, never on a command line, in a log, or on disk.
+	SudoPassword string
 }
 
 func NewRemote(host string, extra []string) (*Remote, error) {
@@ -96,11 +104,21 @@ func (r *Remote) prelude() string {
 // runScript pipes script to the server and runs it with `bash`. The command is
 // wrapped in `bash -c '...'` using only syntax valid in bash and fish, because
 // the remote login shell may well be fish after the first run.
-func (r *Remote) runScript(ctx context.Context, script string, timeout time.Duration, out io.Writer) (int, error) {
-	remote := fmt.Sprintf(`bash -c 'f=$(mktemp /tmp/sss-step.XXXXXX); cat > "$f"; timeout -k 5 %d bash "$f" < /dev/null; rc=$?; rm -f "$f"; exit $rc'`,
-		int(timeout.Seconds()))
+//
+// If password is non-empty it is sent as the first line of stdin; the wrapper
+// reads it into SSS_SUDO_PW (an env var of the step's processes only, so it
+// is not visible in `ps` output, a log or a file).
+func (r *Remote) runScript(ctx context.Context, script, password string, timeout time.Duration, out io.Writer) (int, error) {
+	readPw := ""
+	stdin := script
+	if password != "" {
+		readPw = `IFS= read -r SSS_SUDO_PW; export SSS_SUDO_PW; `
+		stdin = password + "\n" + script
+	}
+	remote := fmt.Sprintf(`bash -c '%sf=$(mktemp /tmp/sss-step.XXXXXX); cat > "$f"; timeout -k 5 %d bash "$f" < /dev/null; rc=$?; rm -f "$f"; exit $rc'`,
+		readPw, int(timeout.Seconds()))
 	cmd := exec.CommandContext(ctx, "ssh", "-S", r.ctlPath, "-T", r.Host, remote)
-	cmd.Stdin = strings.NewReader(script)
+	cmd.Stdin = strings.NewReader(stdin)
 	cmd.Stdout = out
 	cmd.Stderr = out
 	err := cmd.Run()
@@ -121,12 +139,16 @@ echo "version=${VERSION_ID:-}"
 echo "arch=$(uname -m)"
 echo "uid=$(id -u)"
 echo "home=$HOME"
-if sudo -n true 2>/dev/null; then echo sudo=1; fi
+if command -v sudo >/dev/null 2>&1; then
+  out=$(sudo -n true 2>&1 </dev/null) && echo sudo=1 || {
+    case "$out" in *password*) echo sudo=password ;; esac
+  }
+fi
 `
 
 func (r *Remote) Preflight(ctx context.Context) error {
 	var buf bytes.Buffer
-	code, err := r.runScript(ctx, preflightScript, 60*time.Second, &buf)
+	code, err := r.runScript(ctx, preflightScript, "", 60*time.Second, &buf)
 	if err != nil {
 		return err
 	}
@@ -153,6 +175,9 @@ func (r *Remote) Preflight(ctx context.Context) error {
 		info.Root = "root"
 	case kv["sudo"] == "1":
 		info.Root = "sudo"
+	case kv["sudo"] == "password":
+		// Could also be a user who is not in sudoers at all; VerifySudo tells.
+		info.Root = "sudo-password"
 	default:
 		info.Root = "none"
 	}
@@ -167,5 +192,27 @@ func (r *Remote) RunStep(ctx context.Context, s *Step, common string, out io.Wri
 		return -1, err
 	}
 	script := r.prelude() + common + "\n" + string(body)
-	return r.runScript(ctx, script, s.Timeout, out)
+	// Only steps that may use root ever receive the password.
+	pw := ""
+	if r.Info.Root == "sudo-password" && (s.NeedsRoot || s.RootOptional) {
+		pw = r.SudoPassword
+	}
+	return r.runScript(ctx, script, pw, s.Timeout, out)
+}
+
+// VerifySudo checks a sudo password using the same askpass path as as_root,
+// after invalidating any cached sudo timestamp so a wrong password really fails.
+func (r *Remote) VerifySudo(ctx context.Context, password string) bool {
+	script := `
+d=$(mktemp -d); trap 'rm -rf "$d"' EXIT
+cat > "$d/askpass" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$SSS_SUDO_PW"
+EOF
+chmod 700 "$d/askpass"
+sudo -k
+SUDO_ASKPASS="$d/askpass" sudo -A true
+`
+	code, err := r.runScript(ctx, script, password, 60*time.Second, io.Discard)
+	return err == nil && code == 0
 }
